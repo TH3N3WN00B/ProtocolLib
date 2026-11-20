@@ -158,7 +158,7 @@ public class PacketFilterManager implements ListenerManager, InternalManager {
         
         // A monitor listener should never modify a packet/event so we can simply invoke monitor listeners
         // independently of our injector pipeline 
-        if (!filters) {
+        if (!filters && this.outboundListeners.containsPacketType(packet.getType())) {
             this.runMonitorListeners(packet, () -> {
                 PacketEvent event = PacketEvent.fromServer(this, packet, marker, receiver, false);
                 this.outboundListeners.invoke(event, ListenerPriority.MONITOR);
@@ -215,7 +215,7 @@ public class PacketFilterManager implements ListenerManager, InternalManager {
 
             // Prevent possible de-sync if the packet was replaced by a listener.
             nmsPacket = event.getPacket().getHandle();
-        } else {
+        } else if (this.inboundListeners.containsPacketType(packet.getType())) {
             // A monitor listener should never modify a packet/event so we can simply invoke monitor listeners
             // independently of our injector pipeline 
             this.runMonitorListeners(packet, () -> {
@@ -454,6 +454,9 @@ public class PacketFilterManager implements ListenerManager, InternalManager {
                 public void handlePluginUnload(PluginDisableEvent event) {
                     // don't do this for our plugin!
                     if (event.getPlugin() != PacketFilterManager.this.plugin) {
+                        // async handlers run on our own scheduler and keep their worker threads (and the plugin
+                        // class loader) alive unless they are cancelled here
+                        PacketFilterManager.this.asyncFilterManager.unregisterAsyncHandlers(event.getPlugin());
                         PacketFilterManager.this.removePacketListeners(event.getPlugin());
                     }
                 }
