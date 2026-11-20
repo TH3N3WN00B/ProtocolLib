@@ -32,7 +32,9 @@ repositories {
 
 dependencies {
     implementation(project(":"))
-    paperweight.paperDevBundle("$mcVersion.build.+")
+    // Pinned: newer 26.3 builds changed ReloadableServerResources and break the test bootstrap.
+    // Override with -PpaperDevBundle=<version> to try another build.
+    paperweight.paperDevBundle(providers.gradleProperty("paperDevBundle").getOrElse("$mcVersion.build.226-stable"))
 
     compileOnly("io.netty:netty-all:4.2.8.Final")
     compileOnly("net.kyori:adventure-text-serializer-gson:4.25.0")
