@@ -682,7 +682,15 @@ public class NettyChannelInjector implements Injector {
         try {
             FieldAccessor accessor = bundlePacketsAccessor;
             if (accessor == null) {
-                accessor = Accessors.getFieldAccessor(bundle.getClass(), Iterable.class, true);
+                // the packet list is a private field of the BundlePacket superclass
+                Field packetsField = FuzzyReflection.fromClass(bundle.getClass(), true)
+                        .getDeclaredFields(Object.class)
+                        .stream()
+                        .filter(field -> !Modifier.isStatic(field.getModifiers()))
+                        .filter(field -> Iterable.class.isAssignableFrom(field.getType()))
+                        .findFirst()
+                        .orElseThrow(() -> new IllegalStateException("No packet list in " + bundle.getClass()));
+                accessor = Accessors.getFieldAccessor(packetsField);
                 bundlePacketsAccessor = accessor;
             }
             subPackets = (Iterable<?>) accessor.get(bundle);
