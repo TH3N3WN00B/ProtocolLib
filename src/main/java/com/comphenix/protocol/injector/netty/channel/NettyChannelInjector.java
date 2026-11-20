@@ -110,6 +110,12 @@ public class NettyChannelInjector implements Injector {
     // lazy initialized fields, if we don't need them we don't bother about them
     private volatile InboundProtocolReader inboundProtocolReader;
 
+    // last resolved protocol per direction, avoids walking the pipeline for every packet
+    private final ChannelProtocolUtil.ProtocolCache protocolCache = new ChannelProtocolUtil.ProtocolCache();
+
+    // accessor for the sub packets of a bundle packet (1.19.4+), lazily resolved
+    private static volatile FieldAccessor bundlePacketsAccessor;
+
     public NettyChannelInjector(
             Player player,
             Object networkManager,
@@ -347,7 +353,7 @@ public class NettyChannelInjector implements Injector {
 
     @Override
     public Protocol getCurrentProtocol(PacketType.Sender sender) {
-        return ChannelProtocolUtil.PROTOCOL_RESOLVER.apply(this.channel, sender);
+        return ChannelProtocolUtil.getProtocol(this.channel, sender, this.protocolCache);
     }
 
     @Override
@@ -540,6 +546,19 @@ public class NettyChannelInjector implements Injector {
             return action;
         }
 
+        // fast path: skip the protocol lookup when no listener can be interested in the packet. The class check is a
+        // superset of the packet type check below, so this never skips a packet that has listeners.
+        if (marker == null) {
+            Class<?> packetClass = packet.getClass();
+            if (MinecraftReflection.isBundlePacket(packetClass)) {
+                if (!this.bundleMayHaveListener(packet)) {
+                    return action;
+                }
+            } else if (!this.listenerManager.mayHaveOutboundListener(packetClass)) {
+                return action;
+            }
+        }
+
         PacketType.Protocol protocol = this.getCurrentProtocol(PacketType.Sender.SERVER);
         if (protocol == Protocol.UNKNOWN) {
             ProtocolLogger.debug("skipping unknown outbound protocol for {0}", packet.getClass());
@@ -633,6 +652,43 @@ public class NettyChannelInjector implements Injector {
         if (action != null) {
             action.run();
         }
+    }
+
+    /**
+     * Checks if a listener may be interested in the given bundle packet: either the bundle itself or one of the packets
+     * inside of it has listeners.
+     *
+     * @param bundle the bundle packet.
+     * @return false if the bundle and all of its packets can be sent without invoking any listener.
+     */
+    private boolean bundleMayHaveListener(Object bundle) {
+        if (this.listenerManager.hasOutboundListener(PacketType.Play.Server.BUNDLE)) {
+            return true;
+        }
+
+        Iterable<?> subPackets;
+        try {
+            FieldAccessor accessor = bundlePacketsAccessor;
+            if (accessor == null) {
+                accessor = Accessors.getFieldAccessor(bundle.getClass(), Iterable.class, true);
+                bundlePacketsAccessor = accessor;
+            }
+            subPackets = (Iterable<?>) accessor.get(bundle);
+        } catch (RuntimeException exception) {
+            // unable to inspect the bundle, process it the regular way
+            return true;
+        }
+
+        if (subPackets == null) {
+            return false;
+        }
+
+        for (Object subPacket : subPackets) {
+            if (subPacket != null && this.listenerManager.mayHaveOutboundListener(subPacket.getClass())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
